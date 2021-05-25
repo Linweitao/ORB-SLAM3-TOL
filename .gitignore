@@ -4,3 +4,5 @@
 /lib/libORB_SLAM3.so
 /Vocabulary/ORBvoc.txt
 /Examples/Stereo-Inertial/stereo_inertial_euroc
+/Examples/kf_dataset*
+/Examples/f_dataset*

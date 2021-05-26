@@ -229,7 +229,7 @@ cv::Mat System::TrackStereo(const cv::Mat &imLeft, const cv::Mat &imRight, const
             mbResetActiveMap = false;
         }
     }
-    // 如果是单目+imu模式，把IMU数据存储到mlQueueImuData中
+    // 如果是双目+imu模式，把IMU数据存储到mlQueueImuData中
     if (mSensor == System::IMU_STEREO)
         for(size_t i_imu = 0; i_imu < vImuMeas.size(); i_imu++)
             mpTracker->GrabImuData(vImuMeas[i_imu]);

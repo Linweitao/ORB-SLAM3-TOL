@@ -84,15 +84,17 @@ int main(int argc, char **argv)
         cout << "Loading images for sequence " << seq << "...";
 
         string pathSeq(argv[(2*seq) + 3]);
-        string pathTimeStamps(argv[(2*seq) + 4]);
+        string pathTimeStamps(argv[(2*seq) + 4]);//读入图像和惯性数据的时间戳的地址
 
-        string pathCam0 = pathSeq + "/mav0/cam0/data";
-        string pathCam1 = pathSeq + "/mav0/cam1/data";
-        string pathImu = pathSeq + "/mav0/imu0/data.csv";
+        string pathCam0 = pathSeq + "/mav0/cam0/data";//读入相机0的各帧图像数据的地址
+        string pathCam1 = pathSeq + "/mav0/cam1/data";//读入相机1的各帧图像数据的地址
+        string pathImu = pathSeq + "/mav0/imu0/data.csv";//读入惯性测量单元的数据的地址
 
+        //将相机图像数据传入变量中去
         LoadImages(pathCam0, pathCam1, pathTimeStamps, vstrImageLeft[seq], vstrImageRight[seq], vTimestampsCam[seq]);
         cout << "LOADED!" << endl;
 
+        //将IMU的运动数据传入变量中
         cout << "Loading IMU for sequence " << seq << "...";
         LoadIMU(pathImu, vTimestampsImu[seq], vAcc[seq], vGyro[seq]);
         cout << "LOADED!" << endl;

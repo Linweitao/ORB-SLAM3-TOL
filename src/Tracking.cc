@@ -51,8 +51,9 @@ Tracking::Tracking(System *pSys, ORBVocabulary* pVoc, FrameDrawer *pFrameDrawer,
     mnInitialFrameId(0), mbCreatedMap(false), mnFirstFrameId(0), mpCamera2(nullptr)
 {
     // Load camera parameters from settings file
-    cv::FileStorage fSettings(strSettingPath, cv::FileStorage::READ);
-
+    cv::FileStorage fSettings(strSettingPath, cv::FileStorage::READ);//只读
+    //读取相机参数
+    //如果是ROS，DepthMapFactor应该设为1，即深度不进行缩放
     bool b_parse_cam = ParseCamParamFile(fSettings);
     if(!b_parse_cam)
     {
@@ -60,6 +61,8 @@ Tracking::Tracking(System *pSys, ORBVocabulary* pVoc, FrameDrawer *pFrameDrawer,
     }
 
     // Load ORB parameters
+    //读取ORB特征提取的相关参数，该函数中还会
+    //根据参数构造ORB提取器mpORBextractorLeft(左目)、mpORBextractorRight(右目)、mpIniORBextractor(初始化用)
     bool b_parse_orb = ParseORBParamFile(fSettings);
     if(!b_parse_orb)
     {
@@ -72,6 +75,7 @@ Tracking::Tracking(System *pSys, ORBVocabulary* pVoc, FrameDrawer *pFrameDrawer,
     bool b_parse_imu = true;
     if(sensor==System::IMU_MONOCULAR || sensor==System::IMU_STEREO)
     {
+        //读取imu参数，该函数中还会根据参数构建预积分处理器mpImuPreintegratedFromLastKF
         b_parse_imu = ParseIMUParamFile(fSettings);
         if(!b_parse_imu)
         {
@@ -1240,7 +1244,7 @@ cv::Mat Tracking::GrabImageStereo(const cv::Mat &imRectLeft, const cv::Mat &imRe
     mImGray = imRectLeft;
     cv::Mat imGrayRight = imRectRight;
     mImRight = imRectRight;
-
+    //将彩色图像转为灰度图像
     if(mImGray.channels()==3)
     {
         if(mbRGB)
@@ -1267,7 +1271,7 @@ cv::Mat Tracking::GrabImageStereo(const cv::Mat &imRectLeft, const cv::Mat &imRe
             cvtColor(imGrayRight,imGrayRight,cv::COLOR_BGRA2GRAY);
         }
     }
-
+    //构造Frame，同时完成特征点的提取、计算词袋等操作
     if (mSensor == System::STEREO && !mpCamera2)
         mCurrentFrame = Frame(mImGray,imGrayRight,timestamp,mpORBextractorLeft,mpORBextractorRight,mpORBVocabulary,mK,mDistCoef,mbf,mThDepth,mpCamera);
     else if(mSensor == System::STEREO && mpCamera2)
@@ -1285,9 +1289,9 @@ cv::Mat Tracking::GrabImageStereo(const cv::Mat &imRectLeft, const cv::Mat &imRe
     vdStereoMatch_ms.push_back(mCurrentFrame.mTimeStereoMatch);
 #endif
 
-    Track();
+    Track();//最主要的函数
 
-    return mCurrentFrame.mTcw.clone();
+    return mCurrentFrame.mTcw.clone();//返回当前帧的位姿
 }
 
 
@@ -1388,8 +1392,18 @@ void Tracking::GrabImuData(const IMU::Point &imuMeasurement)
     mlQueueImuData.push_back(imuMeasurement);
 }
 
+//预积分
 void Tracking::PreintegrateIMU()
 {
+    /*
+     * 如果上一帧不存在，则不进行预积分；如果没有imu数据，也不进行预积分，直接返回
+     * 保存时间戳在两帧之间的imu数据至mvImuFromLastFrame
+     * 构造预积分器pImuPreintegratedFromLastFrame(这个是上一帧到当前帧的预积分)
+     * 对于n个imu数据，要进行n-1次计算得到两帧之间的预积分量。首先利用中值积分，得到每次计算预积分的加速度和角速度。对于头和尾的Imu数据，由于不能严格地和图像时间戳对齐，需要进行适当的补偿。
+     * 开始计算预积分 IntegrateNewMeasurement( )，这里需要计算上一帧到当前帧的预积分pImuPreintegratedFromLastFrame，
+     *   和上一关键帧到当前帧的预积分mpImuPreintegratedFromLastKF(在初始化帧和插入关键帧时会新建一个，地图更新时，PredictStateIMU需要相对于上一关键帧计算位姿)
+     * 所有imu数据计算完成之后，记录两个预积分值，并设置当前帧为已预积分状态
+     */
     //cout << "start preintegration" << endl;
 
     if(!mCurrentFrame.mpPrevFrame)
@@ -1498,9 +1512,20 @@ void Tracking::PreintegrateIMU()
     Verbose::PrintMess("Preintegration is finished!! ", Verbose::VERBOSITY_DEBUG);
 }
 
-
+//利用IMU计算位姿
 bool Tracking::PredictStateIMU()
 {
+/*
+ * 有两种情况会用到此函数：
+ * （a）视觉跟丢时用imu预测位姿。
+ * （b）imu模式下，恒速模型跟踪时提供位姿初始值。
+ *  此函数不会直接设置当前帧的位姿，而是记录当前帧的imu到世界坐标系的平移、旋转和速度。
+ *  在后面TrackLocalMap( )中对位姿优化后才设置当前帧的位姿Tcw。
+ *  地图更新(回环、融合、局部BA、IMU初始化时地图会调整)时，利用上一关键帧和距离上一关键帧的预积分，计算当前帧imu的位姿，
+ *  因为此时关键帧经过了优化调整，认为更准。
+ *  地图未更新时，利用前一帧和距离前一帧的预积分，计算当前帧imu的位姿，
+ *  因为此时关键帧没有做优化调整，而前一帧距离更近，认为更准。
+ * */
     if(!mCurrentFrame.mpPrevFrame)
     {
         Verbose::PrintMess("No last frame", Verbose::VERBOSITY_NORMAL);
@@ -2327,7 +2352,17 @@ void Tracking::Track()
 
 void Tracking::StereoInitialization()
 {
-    if(mCurrentFrame.N>500)
+    /*
+     * 提取的特征点必须大于500
+     * 如果是Stereo_IMU，检查一下是否有预积分，如果没有说明没有Imu测量。
+     *   再检查一下当前帧加速度和上一帧加速度的差值是否大于0.5，如果小于说明加速度变化不够，也不行。
+     * 直接设置初始化帧(当前帧)的位姿为单位阵.
+     * 将当前帧构造成关键帧，加入地图集Atlas中，然后生成初始地图点，
+     *   添加地图点和关键帧之间的连接关系，计算地图点最好的描述子ComputeDistinctiveDescriptors()，
+     *   更新平均观测方向和深度范围UpdateNormalAndDepth()
+     * 最后，将关键帧加入LocalMapping线程，然后做一下标记工作。
+     */
+    if(mCurrentFrame.N>500)//如果当前帧的关键点keypoint个数大于500
     {
         if (mSensor == System::IMU_STEREO)
         {
@@ -2436,27 +2471,27 @@ void Tracking::StereoInitialization()
 void Tracking::MonocularInitialization()
 {
 
-    if(!mpInitializer)
-    {
+    if(!mpInitializer)//判断是否创建了初始化求解器，如果没有，说明是第一帧，如果有，说明已经是第二帧
+    {   //ORB-SLAM3中mpInitializer感觉只是一个标志，真正的初始化在TwoViewReconstruction类中
         // Set Reference Frame
-        if(mCurrentFrame.mvKeys.size()>100)
+        if(mCurrentFrame.mvKeys.size()>100)//特征点必须大于100
         {
 
-            mInitialFrame = Frame(mCurrentFrame);
-            mLastFrame = Frame(mCurrentFrame);
-            mvbPrevMatched.resize(mCurrentFrame.mvKeysUn.size());
+            mInitialFrame = Frame(mCurrentFrame);//第一帧设为初始化帧
+            mLastFrame = Frame(mCurrentFrame);//mLastFrame也是它
+            mvbPrevMatched.resize(mCurrentFrame.mvKeysUn.size());//第一帧的匹配点
             for(size_t i=0; i<mCurrentFrame.mvKeysUn.size(); i++)
-                mvbPrevMatched[i]=mCurrentFrame.mvKeysUn[i].pt;
+                mvbPrevMatched[i]=mCurrentFrame.mvKeysUn[i].pt;//一开始放入全部关键点
 
             if(mpInitializer)
                 delete mpInitializer;
 
-            mpInitializer =  new Initializer(mCurrentFrame,1.0,200);
+            mpInitializer =  new Initializer(mCurrentFrame,1.0,200);//新建初始化求解器
 
             fill(mvIniMatches.begin(),mvIniMatches.end(),-1);
 
             if (mSensor == System::IMU_MONOCULAR)
-            {
+            {   //如果是imu模式，新建预积分求解器
                 if(mpImuPreintegratedFromLastKF)
                 {
                     delete mpImuPreintegratedFromLastKF;
@@ -2468,8 +2503,8 @@ void Tracking::MonocularInitialization()
             return;
         }
     }
-    else
-    {
+    else//第二帧
+    {   //如果当前帧的关键点小于100，或者imu模式下相对于上一帧超过1s,则一切重新来过
         if (((int)mCurrentFrame.mvKeys.size()<=100)||((mSensor == System::IMU_MONOCULAR)&&(mLastFrame.mTimeStamp-mInitialFrame.mTimeStamp>1.0)))
         {
             delete mpInitializer;
@@ -2479,12 +2514,12 @@ void Tracking::MonocularInitialization()
             return;
         }
 
-        // Find correspondences
+        // Find correspondences 找匹配点
         ORBmatcher matcher(0.9,true);
         int nmatches = matcher.SearchForInitialization(mInitialFrame,mCurrentFrame,mvbPrevMatched,mvIniMatches,100);
 
         // Check if there are enough correspondences
-        if(nmatches<100)
+        if(nmatches<100)//匹配点数小于100，则一切重新来
         {
             delete mpInitializer;
             mpInitializer = static_cast<Initializer*>(NULL);
@@ -2497,7 +2532,7 @@ void Tracking::MonocularInitialization()
         vector<bool> vbTriangulated; // Triangulated Correspondences (mvIniMatches)
 
         if(mpCamera->ReconstructWithTwoViews(mInitialFrame.mvKeysUn,mCurrentFrame.mvKeysUn,mvIniMatches,Rcw,tcw,mvIniP3D,vbTriangulated))
-        {
+        {//如果位姿求解成功，删除没有成功三角化的匹配点
             for(size_t i=0, iend=mvIniMatches.size(); i<iend;i++)
             {
                 if(mvIniMatches[i]>=0 && !vbTriangulated[i])
@@ -2507,14 +2542,14 @@ void Tracking::MonocularInitialization()
                 }
             }
 
-            // Set Frame Poses
+            // Set Frame Poses  设置两帧的位姿
             mInitialFrame.SetPose(cv::Mat::eye(4,4,CV_32F));
             cv::Mat Tcw = cv::Mat::eye(4,4,CV_32F);
             Rcw.copyTo(Tcw.rowRange(0,3).colRange(0,3));
             tcw.copyTo(Tcw.rowRange(0,3).col(3));
             mCurrentFrame.SetPose(Tcw);
 
-            CreateInitialMapMonocular();
+            CreateInitialMapMonocular(); //根据三角化的结果，创建初始地图点，并做一些必要的计算
 
         }
     }
@@ -2720,17 +2755,23 @@ void Tracking::CheckReplacedInLastFrame()
     }
 }
 
-
+//跟踪参考关键帧
 bool Tracking::TrackReferenceKeyFrame()
 {
+    /*
+     * 有两种情况会用到此函数:
+     * （a）刚刚进行了重定位，则跟踪参考关键帧。
+     * （b）恒速模型为空或恒速跟踪失败。
+     */
     // Compute Bag of Words vector
-    mCurrentFrame.ComputeBoW();
+    mCurrentFrame.ComputeBoW();//计算词袋向量mBowVec和特征向量mFeatVec
 
     // We perform first an ORB matching with the reference keyframe
     // If enough matches are found we setup a PnP solver
     ORBmatcher matcher(0.7,true);
     vector<MapPoint*> vpMapPointMatches;
-
+    //通过BoW加速匹配。用到了mFeatVec，两个关键帧中 只有节点相同的特征点才会被比较，相同节点中的特征点采用暴力搜索，并且需要检查方向性，
+    //并且最优的要明显好于次优的。
     int nmatches = matcher.SearchByBoW(mpReferenceKF,mCurrentFrame,vpMapPointMatches);
 
     if(nmatches<15)
@@ -2740,16 +2781,17 @@ bool Tracking::TrackReferenceKeyFrame()
     }
 
     mCurrentFrame.mvpMapPoints = vpMapPointMatches;
-    mCurrentFrame.SetPose(mLastFrame.mTcw);
+    mCurrentFrame.SetPose(mLastFrame.mTcw);//用上一帧的位姿作为初始值
 
     //mCurrentFrame.PrintPointDistribution();
 
 
     // cout << " TrackReferenceKeyFrame mLastFrame.mTcw:  " << mLastFrame.mTcw << endl;
-    Optimizer::PoseOptimization(&mCurrentFrame);
+    Optimizer::PoseOptimization(&mCurrentFrame);//位姿优化
 
     // Discard outliers
     int nmatchesMap = 0;
+    //删除外点，统计内点
     for(int i =0; i<mCurrentFrame.N; i++)
     {
         if(mCurrentFrame.mvpMapPoints[i])
@@ -2849,8 +2891,21 @@ void Tracking::UpdateLastFrame()
     }
 }
 
+//恒速模型跟踪
 bool Tracking::TrackWithMotionModel()
 {
+    /*
+     * 构建ORB匹配器 ORBmatcher。
+     * 更新上一帧的位姿和地图点(UpdateLastFrame())，
+     *   这个函数主要是根据上一帧与它的参考关键帧的相对位姿，乘上它参考关键帧的位姿，来更新上一帧的位姿，
+     *   即认为相对位姿是准的，而参考关键帧的位姿可能在优化时被调整过了。
+     *   如果是双目或RGBD模式，还会产生临时地图点，增加匹配，跟踪结束后会删除。
+     * 如果是imu模式，则调用PredictStateIMU( )来提供位姿估计的初始值。
+     *   如果是纯视觉，则用上上帧到上一帧的相对位姿mVelocity，作为上一帧到当前帧的相对位姿，提供位姿估计初始值。
+     * 通过将上一帧的地图点投影到当前帧，寻找匹配 matcher.SearchByProjection( )
+     * 根据获得的匹配点进行位姿优化，Optimizer::PoseOptimization(&mCurrentFrame)
+     * 去除外点，根据内点数判断是否跟踪成功，其中，imu模式总是返回true。
+     */
     ORBmatcher matcher(0.9,true);
 
     // Update last frame pose according to its reference keyframe
@@ -2944,9 +2999,20 @@ bool Tracking::TrackWithMotionModel()
         return nmatchesMap>=10;
 }
 
+//跟踪局部地图
 bool Tracking::TrackLocalMap()
 {
-
+    //这个函数主要是利用局部窗口的关键帧和地图点，为当前帧找到更多的匹配地图点，再进行位姿优化，使得位姿更加准确。
+    /*
+     * 首先更新局部关键帧和局部地图点。
+     *   找到与当前帧共视程度最高的关键帧pKFmax，放入mvpLocalKeyFrames中，
+     *   将pKFmax的父子关键帧、共视程度最高的10帧关键帧也放入mvpLocalKeyFrames中，
+     *   如果是ium模式还要将当前帧之前连续的20放入mvpLocalKeyFrames中。
+     * 将mvpLocalKeyFrames中关键帧对应的地图点都放入mvpLocalMapPoints中。
+     * 通过投影匹配找到与当前帧匹配的局部地图点 SearchByProjection()
+     * 进行位姿优化。imu模式下地图更新时用PoseInertialOptimizationLastKeyFrame()，地图未更新时用PoseInertialOptimizationLastFrame()。
+     * 删除无效地图点，根据内点数判断是否跟踪成功
+     */
     // We have an estimation of the camera pose and some map points tracked in the frame.
     // We retrieve the local map and try to find matches to points in the local map.
     mTrackedFr++;
@@ -3083,8 +3149,17 @@ bool Tracking::TrackLocalMap()
     }
 }
 
+//关键帧选取策略
 bool Tracking::NeedNewKeyFrame()
 {
+    /*
+     * 关键帧插入主要考虑以下几个因素：
+     *   程序运行的模式(是否纯定位)、LocalMapping线程的状态等，限制了不能插入关键帧
+     *   距离上一次插入关键帧的时间。imu模式有固定的最长插入间隔跟踪的好坏。
+     *   跟踪得不好时需要快点插入关键帧。传感器的类型。
+     *   单目插入关键帧最频繁。
+     */
+    //如果是imu模式，没初始化之前每隔0.25s就插入关键帧
     if(((mSensor == System::IMU_MONOCULAR) || (mSensor == System::IMU_STEREO)) && !mpAtlas->GetCurrentMap()->isImuInitialized())
     {
         if (mSensor == System::IMU_MONOCULAR && (mCurrentFrame.mTimeStamp-mpLastKeyFrame->mTimeStamp)>=0.25)
@@ -3094,11 +3169,12 @@ bool Tracking::NeedNewKeyFrame()
         else
             return false;
     }
-
+    //纯定位模式不插入关键帧，因为局部建图线程不工作
     if(mbOnlyTracking)
         return false;
 
     // If Local Mapping is freezed by a Loop Closure do not insert keyframes
+    //如果Local Mapping被Loop Closure请求停止了，则不插入关键帧
     if(mpLocalMapper->isStopped() || mpLocalMapper->stopRequested())
     {
         return false;
@@ -3119,39 +3195,42 @@ bool Tracking::NeedNewKeyFrame()
     int nMinObs = 3;
     if(nKFs<=2)
         nMinObs=2;
+    //参考关键帧的地图点中，大于等于最小观测数目的地图点个数，即这些地图点被追踪到了
     int nRefMatches = mpReferenceKF->TrackedMapPoints(nMinObs);
 
     // Local Mapping accept keyframes?
     bool bLocalMappingIdle = mpLocalMapper->AcceptKeyFrames();
 
     // Check how many "close" points are being tracked and how many could be potentially created.
+    //统计近点中被跟踪到的个数和未跟踪到的个数（非单目和非单目imu）
     int nNonTrackedClose = 0;
     int nTrackedClose= 0;
 
     if(mSensor!=System::MONOCULAR && mSensor!=System::IMU_MONOCULAR)
     {
+        //特征点的个数N
         int N = (mCurrentFrame.Nleft == -1) ? mCurrentFrame.N : mCurrentFrame.Nleft;
         for(int i =0; i<N; i++)
-        {
+        {   //特征点的深度大于0小于远近点阈值
             if(mCurrentFrame.mvDepth[i]>0 && mCurrentFrame.mvDepth[i]<mThDepth)
             {
                 if(mCurrentFrame.mvpMapPoints[i] && !mCurrentFrame.mvbOutlier[i])
-                    nTrackedClose++;
+                    nTrackedClose++;//该点不是外点，则追踪到的近点加一
                 else
-                    nNonTrackedClose++;
+                    nNonTrackedClose++;//是外点，未追踪到的近点加一
 
             }
         }
     }
 
-    bool bNeedToInsertClose;
+    bool bNeedToInsertClose;//跟踪到的近点不多，但未跟踪到的近点很多，说明跟踪得不好
     bNeedToInsertClose = (nTrackedClose<100) && (nNonTrackedClose>70);
-
+    //当前帧和参考关键帧跟踪到点的比例。阈值越大，越容易达到插入关键帧的条件
     // Thresholds
     float thRefRatio = 0.75f;
     if(nKFs<2)
         thRefRatio = 0.4f;
-
+    //单目插入最频繁
     if(mSensor==System::MONOCULAR)
         thRefRatio = 0.9f;
 
@@ -3177,7 +3256,7 @@ bool Tracking::NeedNewKeyFrame()
     // Temporal condition for Inertial cases
     bool c3 = false;
     if(mpLastKeyFrame)
-    {
+    {   //imu模式下超过0.5s之后则c3为true
         if (mSensor==System::IMU_MONOCULAR)
         {
             if ((mCurrentFrame.mTimeStamp-mpLastKeyFrame->mTimeStamp)>=0.5)
@@ -3205,16 +3284,16 @@ bool Tracking::NeedNewKeyFrame()
             return true;
         }
         else
-        {
+        {   //局部建图繁忙的话，请求停止局部BA
             mpLocalMapper->InterruptBA();
             if(mSensor!=System::MONOCULAR  && mSensor!=System::IMU_MONOCULAR)
-            {
+            {   //非单目和非单目imu模式，且关键帧队列中小于3，可以插入
                 if(mpLocalMapper->KeyframesInQueue()<3)
                     return true;
                 else
                     return false;
             }
-            else
+            else  //单目和单目imu模式直接不能插入，因为单目本来就插入比较密集，这里就不需要插入了
                 return false;
         }
     }
@@ -3465,7 +3544,6 @@ void Tracking::UpdateLocalPoints()
     }
 }
 
-
 void Tracking::UpdateLocalKeyFrames()
 {
     // Each map point vote for the keyframes in which it has been observed
@@ -3617,8 +3695,17 @@ void Tracking::UpdateLocalKeyFrames()
     }
 }
 
+//重定位
 bool Tracking::Relocalization()
 {
+    /*
+     * 计算当前帧的BoW
+     * 利用反向索引在关键帧数据库中找到候选关键帧DetectRelocalizationCandidates()
+     * 逐一与候选关键帧进行BoW加速匹配 SearchByBoW(),丢弃匹配点数小于15的候选帧，为剩下的候选帧构建MLPnPsolver
+     * 对匹配数大于15的候选帧求解MLPnP，得到位姿之后进行位姿优化，如果优化内点数足够(大于50)，直接退出循环，返回true
+     * 如果优化内点数不够，则进行投影匹配，找到更多的匹配点，再进行位姿优化，
+     *   如此抢救两次之后优化内点数还是不够的话，该候选帧求解失败，继续下一候选帧，直到所有候选帧求解都失败或有一个候选帧求解成功。
+     */
     Verbose::PrintMess("Starting relocalization", Verbose::VERBOSITY_NORMAL);
     // Compute Bag of Words Vector
     mCurrentFrame.ComputeBoW();

@@ -40,6 +40,7 @@ namespace IMU
 const float GRAVITY_VALUE=9.81;
 
 //IMU measurement (gyro, accelerometer and timestamp)
+//imu加速度、角速度、时间戳数据
 class Point
 {
 public:
@@ -49,14 +50,15 @@ public:
     Point(const cv::Point3f Acc, const cv::Point3f Gyro, const double &timestamp):
         a(Acc.x,Acc.y,Acc.z), w(Gyro.x,Gyro.y,Gyro.z), t(timestamp){}
 public:
-    cv::Point3f a;
-    cv::Point3f w;
-    double t;
+    cv::Point3f a;//加速度
+    cv::Point3f w;//角速度
+    double t;//时间戳
 };
 
 //IMU biases (gyro and accelerometer)
 class Bias
 {
+    //序列化，将一个类的实例转换成二进制数据流或XML格式。也可以通过反序列化得到原来的类实例
     friend class boost::serialization::access;
     template<class Archive>
     void serialize(Archive & ar, const unsigned int version)
@@ -75,12 +77,12 @@ public:
     Bias(const float &b_acc_x, const float &b_acc_y, const float &b_acc_z,
             const float &b_ang_vel_x, const float &b_ang_vel_y, const float &b_ang_vel_z):
             bax(b_acc_x), bay(b_acc_y), baz(b_acc_z), bwx(b_ang_vel_x), bwy(b_ang_vel_y), bwz(b_ang_vel_z){}
-    void CopyFrom(Bias &b);
-    friend std::ostream& operator<< (std::ostream &out, const Bias &b);
+    void CopyFrom(Bias &b);//复制b
+    friend std::ostream& operator<< (std::ostream &out, const Bias &b);//将运算符<<重载，使bias可以通过<<符号读取数据
 
 public:
-    float bax, bay, baz;
-    float bwx, bwy, bwz;
+    float bax, bay, baz;//加速度三个方向的bias
+    float bwx, bwy, bwz;//角速度三个方向的bias
 };
 
 //IMU calibration (Tbc, Tcb, noise)
@@ -133,9 +135,9 @@ public:
     void Set(const cv::Mat &Tbc_, const float &ng, const float &na, const float &ngw, const float &naw);
 
 public:
-    cv::Mat Tcb;
-    cv::Mat Tbc;
-    cv::Mat Cov, CovWalk;
+    cv::Mat Tcb;//imu坐标系到相机坐标系的变换矩阵
+    cv::Mat Tbc;//相机坐标系到imu坐标系的变换矩阵
+    cv::Mat Cov, CovWalk;//imu数据的高斯噪声协方差(6*6)、imu的bias随机游走的协方差(6*6)，这两个都是由标定得到
 };
 
 //Integration of 1 gyro measurement
@@ -152,6 +154,7 @@ public:
 };
 
 //Preintegration of Imu Measurements
+//imu预积分
 class Preintegrated
 {
     template<class Archive>

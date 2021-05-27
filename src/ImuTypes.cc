@@ -152,21 +152,24 @@ cv::Mat InverseRightJacobianSO3(const cv::Mat &v)
 IntegratedRotation::IntegratedRotation(const cv::Point3f &angVel, const Bias &imuBias, const float &time):
     deltaT(time)
 {
+    //角速度减去偏置，再乘上时间，就是该时间内的旋转，xyz构成旋转向量
     const float x = (angVel.x-imuBias.bwx)*time;
     const float y = (angVel.y-imuBias.bwy)*time;
     const float z = (angVel.z-imuBias.bwz)*time;
 
     cv::Mat I = cv::Mat::eye(3,3,CV_32F);
-
+    //计算旋转向量的模值
     const float d2 = x*x+y*y+z*z;
     const float d = sqrt(d2);
-
+    //旋转向量(so3)写成反对称形式
     cv::Mat W = (cv::Mat_<float>(3,3) << 0, -z, y,
                  z, 0, -x,
                  -y,  x, 0);
-    if(d<eps)
+    // eps = 1e-4 是一个小量，在ImuTypes.cc文件开头有定义
+    if(d<eps)//旋转比较小，旋转向量到旋转矩阵的指数映射采用一阶近似
     {
         deltaR = I + W;
+        //小量时，右扰动 Jr = I
         rightJ = cv::Mat::eye(3,3,CV_32F);
     }
     else
@@ -176,11 +179,11 @@ IntegratedRotation::IntegratedRotation(const cv::Point3f &angVel, const Bias &im
     }
 }
 
-Preintegrated::Preintegrated(const Bias &b_, const Calib &calib)
+Preintegrated::Preintegrated(const Bias &b_, const Calib &calib)//构造函数
 {
-    Nga = calib.Cov.clone();
-    NgaWalk = calib.CovWalk.clone();
-    Initialize(b_);
+    Nga = calib.Cov.clone();//从标定得到的imu数据协方差矩阵
+    NgaWalk = calib.CovWalk.clone();//从标定得到的bias随机游走协方差矩阵
+    Initialize(b_);//根据bias初始化预积分相关的变量，bias改变时预积分会改变
 }
 
 // Copy constructor
@@ -223,22 +226,22 @@ void Preintegrated::CopyFrom(Preintegrated* pImuPre)
 
 void Preintegrated::Initialize(const Bias &b_)
 {
-    dR = cv::Mat::eye(3,3,CV_32F);
-    dV = cv::Mat::zeros(3,1,CV_32F);
-    dP = cv::Mat::zeros(3,1,CV_32F);
-    JRg = cv::Mat::zeros(3,3,CV_32F);
-    JVg = cv::Mat::zeros(3,3,CV_32F);
-    JVa = cv::Mat::zeros(3,3,CV_32F);
-    JPg = cv::Mat::zeros(3,3,CV_32F);
-    JPa = cv::Mat::zeros(3,3,CV_32F);
-    C = cv::Mat::zeros(15,15,CV_32F);
-    Info=cv::Mat();
-    db = cv::Mat::zeros(6,1,CV_32F);
+    dR = cv::Mat::eye(3,3,CV_32F);//旋转预积分初始值为单位阵
+    dV = cv::Mat::zeros(3,1,CV_32F);//速度预积分初始为0
+    dP = cv::Mat::zeros(3,1,CV_32F);//位置预积分初始为0
+    JRg = cv::Mat::zeros(3,3,CV_32F);//旋转预积分对delta(bg)的雅克比，在bias改变后预积分量一阶近似更新模型中使用
+    JVg = cv::Mat::zeros(3,3,CV_32F);//速度预积分对delta(bg)的雅克比
+    JVa = cv::Mat::zeros(3,3,CV_32F);//速度预积分对delta(ba)的雅克比
+    JPg = cv::Mat::zeros(3,3,CV_32F);//位置预积分对delta(bg)的雅克比
+    JPa = cv::Mat::zeros(3,3,CV_32F);//位置预积分对delta(ba)的雅克比
+    C = cv::Mat::zeros(15,15,CV_32F);//协方差传递所需的A,B矩阵，A为左上角9*9，B为右下角6*6
+    Info=cv::Mat();//信息矩阵(协方差矩阵的逆)
+    db = cv::Mat::zeros(6,1,CV_32F);//bias的变化量
     b=b_;
     bu=b_;
-    avgA = cv::Mat::zeros(3,1,CV_32F);
-    avgW = cv::Mat::zeros(3,1,CV_32F);
-    dT=0.0f;
+    avgA = cv::Mat::zeros(3,1,CV_32F);//平均加速度，用于判断加速度是否变化
+    avgW = cv::Mat::zeros(3,1,CV_32F);//平均角速度
+    dT=0.0f;//时间间隔
     mvMeasurements.clear();
 }
 
@@ -253,6 +256,7 @@ void Preintegrated::Reintegrate()
 
 void Preintegrated::IntegrateNewMeasurement(const cv::Point3f &acceleration, const cv::Point3f &angVel, const float &dt)
 {
+    //将imu数据构造成一个integrable结构体，保存到mvMeasurements中
     mvMeasurements.push_back(integrable(acceleration,angVel,dt));
 
     // Position is updated firstly, as it depends on previously computed velocity and rotation.
@@ -260,16 +264,18 @@ void Preintegrated::IntegrateNewMeasurement(const cv::Point3f &acceleration, con
     // Rotation is the last to be updated.
 
     //Matrices to compute covariance
+    //计算协方差传递所需的A、B矩阵，下面的计算详见forster论文附录A.7~A.9
     cv::Mat A = cv::Mat::eye(9,9,CV_32F);
     cv::Mat B = cv::Mat::zeros(9,6,CV_32F);
-
+    // 减去偏置后的加速度、角速度
     cv::Mat acc = (cv::Mat_<float>(3,1) << acceleration.x-b.bax,acceleration.y-b.bay, acceleration.z-b.baz);
     cv::Mat accW = (cv::Mat_<float>(3,1) << angVel.x-b.bwx, angVel.y-b.bwy, angVel.z-b.bwz);
-
+    // 计算平均加速度和角速度
     avgA = (dT*avgA + dR*acc*dt)/(dT+dt);
     avgW = (dT*avgW + accW*dt)/(dT+dt);
 
     // Update delta position dP and velocity dV (rely on no-updated delta rotation)
+    //更新P、V的预积分量
     dP = dP + dV*dt + 0.5f*dR*acc*dt*dt;
     dV = dV + dR*acc*dt;
 
@@ -284,13 +290,16 @@ void Preintegrated::IntegrateNewMeasurement(const cv::Point3f &acceleration, con
     B.rowRange(6,9).colRange(3,6) = 0.5f*dR*dt*dt;
 
     // Update position and velocity jacobians wrt bias correction
+    // 预积分量对bias变化量的雅克比
     JPa = JPa + JVa*dt -0.5f*dR*dt*dt;
     JPg = JPg + JVg*dt -0.5f*dR*dt*dt*Wacc*JRg;
     JVa = JVa - dR*dt;
     JVg = JVg - dR*dt*Wacc*JRg;
 
     // Update delta rotation
+    //对角速度进行积分，得到旋转变化量
     IntegratedRotation dRi(angVel,b,dt);
+    // 旧的旋转预积分量乘上旋转变化量，归一化使其符合旋转矩阵的格式
     dR = NormalizeRotation(dR*dRi.deltaR);
 
     // Compute rotation parts of matrices A and B
@@ -353,27 +362,31 @@ IMU::Bias Preintegrated::GetDeltaBias(const Bias &b_)
     return IMU::Bias(b_.bax-b.bax,b_.bay-b.bay,b_.baz-b.baz,b_.bwx-b.bwx,b_.bwy-b.bwy,b_.bwz-b.bwz);
 }
 
+//bias更新之后新的旋转预积分(一阶线性模型)
 cv::Mat Preintegrated::GetDeltaRotation(const Bias &b_)
 {
     std::unique_lock<std::mutex> lock(mMutex);
+    // 计算偏置的变化量
     cv::Mat dbg = (cv::Mat_<float>(3,1) << b_.bwx-b.bwx,b_.bwy-b.bwy,b_.bwz-b.bwz);
-    return NormalizeRotation(dR*ExpSO3(JRg*dbg));
+    return NormalizeRotation(dR*ExpSO3(JRg*dbg));//一阶近似更新
 }
 
+//bias更新之后新的速度预积分(一阶线性模型)
 cv::Mat Preintegrated::GetDeltaVelocity(const Bias &b_)
 {
     std::unique_lock<std::mutex> lock(mMutex);
     cv::Mat dbg = (cv::Mat_<float>(3,1) << b_.bwx-b.bwx,b_.bwy-b.bwy,b_.bwz-b.bwz);
     cv::Mat dba = (cv::Mat_<float>(3,1) << b_.bax-b.bax,b_.bay-b.bay,b_.baz-b.baz);
-    return dV + JVg*dbg + JVa*dba;
+    return dV + JVg*dbg + JVa*dba;//一阶近似更新
 }
 
+//bias更新之后新的平移预积分(一阶线性模型)
 cv::Mat Preintegrated::GetDeltaPosition(const Bias &b_)
 {
     std::unique_lock<std::mutex> lock(mMutex);
     cv::Mat dbg = (cv::Mat_<float>(3,1) << b_.bwx-b.bwx,b_.bwy-b.bwy,b_.bwz-b.bwz);
     cv::Mat dba = (cv::Mat_<float>(3,1) << b_.bax-b.bax,b_.bay-b.bay,b_.baz-b.baz);
-    return dP + JPg*dbg + JPa*dba;
+    return dP + JPg*dbg + JPa*dba;//一阶近似更新
 }
 
 cv::Mat Preintegrated::GetUpdatedDeltaRotation()
@@ -484,13 +497,15 @@ std::ostream& operator<< (std::ostream &out, const Bias &b)
 
 void Calib::Set(const cv::Mat &Tbc_, const float &ng, const float &na, const float &ngw, const float &naw)
 {
+    //相机->imu的变换矩阵
     Tbc = Tbc_.clone();
+    //imu->相机的变换矩阵
     Tcb = cv::Mat::eye(4,4,CV_32F);
     Tcb.rowRange(0,3).colRange(0,3) = Tbc.rowRange(0,3).colRange(0,3).t();
     Tcb.rowRange(0,3).col(3) = -Tbc.rowRange(0,3).colRange(0,3).t()*Tbc.rowRange(0,3).col(3);
-    Cov = cv::Mat::eye(6,6,CV_32F);
-    const float ng2 = ng*ng;
-    const float na2 = na*na;
+    Cov = cv::Mat::eye(6,6,CV_32F);//na、ng、naw、ngw都是标定的imu参数
+    const float ng2 = ng*ng; //用它们来构造协方差矩阵
+    const float na2 = na*na; //后面预积分时会用到
     Cov.at<float>(0,0) = ng2;
     Cov.at<float>(1,1) = ng2;
     Cov.at<float>(2,2) = ng2;

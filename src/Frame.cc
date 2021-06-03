@@ -280,7 +280,7 @@ Frame::Frame(const cv::Mat &imGray, const cv::Mat &imDepth, const double &timeSt
     AssignFeaturesToGrid();
 }
 
-
+//主要完成工作是特征点提取，涉及到的知识点其实很多，包括图像金字塔、特征点均匀化、四叉树算法分发特征点、特征点方向计算等等
 Frame::Frame(const cv::Mat &imGray, const double &timeStamp, ORBextractor* extractor,ORBVocabulary* voc, GeometricCamera* pCamera, cv::Mat &distCoef, const float &bf, const float &thDepth, Frame* pPrevF, const IMU::Calib &ImuCalib)
     :mpcpi(NULL),mpORBvocabulary(voc),mpORBextractorLeft(extractor),mpORBextractorRight(static_cast<ORBextractor*>(NULL)),
      mTimeStamp(timeStamp), mK(static_cast<Pinhole*>(pCamera)->toK()), mDistCoef(distCoef.clone()), mbf(bf), mThDepth(thDepth),
@@ -303,6 +303,7 @@ Frame::Frame(const cv::Mat &imGray, const double &timeStamp, ORBextractor* extra
 #ifdef REGISTER_TIMES
     std::chrono::steady_clock::time_point time_StartExtORB = std::chrono::steady_clock::now();
 #endif
+    //对这个单目图像进行提取特征点
     ExtractORB(0,imGray,0,1000);
 #ifdef REGISTER_TIMES
     std::chrono::steady_clock::time_point time_EndExtORB = std::chrono::steady_clock::now();
@@ -376,7 +377,9 @@ Frame::Frame(const cv::Mat &imGray, const double &timeStamp, ORBextractor* extra
     mpMutexImu = new std::mutex();
 }
 
-
+//将整张图片分为64×48的网格
+//并将每个特征点的id加入到该网格中，即mGrid容器存储的是特征点的id
+//分配特征点到各个网格，加速特征匹配
 void Frame::AssignFeaturesToGrid()
 {
     // Fill matrix with points
@@ -386,7 +389,7 @@ void Frame::AssignFeaturesToGrid()
 
     for(unsigned int i=0; i<FRAME_GRID_COLS;i++)
         for (unsigned int j=0; j<FRAME_GRID_ROWS;j++){
-            mGrid[i][j].reserve(nReserve);
+            mGrid[i][j].reserve(nReserve);//分配空间
             if(Nleft != -1){
                 mGridRight[i][j].reserve(nReserve);
             }
@@ -403,7 +406,7 @@ void Frame::AssignFeaturesToGrid()
         int nGridPosX, nGridPosY;
         if(PosInGrid(kp,nGridPosX,nGridPosY)){
             if(Nleft == -1 || i < Nleft)
-                mGrid[nGridPosX][nGridPosY].push_back(i);
+                mGrid[nGridPosX][nGridPosY].push_back(i);//如果找到特征点所在网格坐标，将这个特征点的索引添加到对应网格的数组mGrid中
             else
                 mGridRight[nGridPosX][nGridPosY].push_back(i - Nleft);
         }
@@ -729,9 +732,10 @@ void Frame::ComputeBoW()
         mpORBvocabulary->transform(vCurrentDesc,mBowVec,mFeatVec,4);
     }
 }
-
+//矫正关键点
 void Frame::UndistortKeyPoints()
 {
+    //判断是否需要去畸变
     if(mDistCoef.at<float>(0)==0.0)
     {
         mvKeysUn=mvKeys;
@@ -749,6 +753,7 @@ void Frame::UndistortKeyPoints()
 
     // Undistort points
     mat=mat.reshape(2);
+    //利用OpenCV的函数进行矫正
     cv::undistortPoints(mat,mat, static_cast<Pinhole*>(mpCamera)->toK(),mDistCoef,cv::Mat(),mK);
     mat=mat.reshape(1);
 

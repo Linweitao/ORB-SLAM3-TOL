@@ -443,6 +443,7 @@ bool MapPoint::IsInKeyFrame(KeyFrame *pKF)
     return (mObservations.count(pKF));
 }
 
+//更新平均观测方向以及观测距离范围
 void MapPoint::UpdateNormalAndDepth()
 {
     map<KeyFrame*,tuple<int,int>> observations;
@@ -505,7 +506,9 @@ void MapPoint::UpdateNormalAndDepth()
 
     {
         unique_lock<mutex> lock3(mMutexPos);
+        // 观测相机位置到该点的距离上限
         mfMaxDistance = dist*levelScaleFactor;
+        // 观测相机位置到该点的距离下限
         mfMinDistance = mfMaxDistance/pRefKF->mvScaleFactors[nLevels-1];
         mNormalVector = normal/n;
         mNormalVectorx = cv::Matx31f(mNormalVector.at<float>(0), mNormalVector.at<float>(1), mNormalVector.at<float>(2));
@@ -548,6 +551,7 @@ int MapPoint::PredictScale(const float &currentDist, KeyFrame* pKF)
     return nScale;
 }
 
+//根据地图点到光心的距离，来预测一个类似特征金字塔的尺度
 int MapPoint::PredictScale(const float &currentDist, Frame* pF)
 {
     float ratio;

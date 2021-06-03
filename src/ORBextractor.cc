@@ -533,7 +533,9 @@ namespace ORB_SLAM3
             n4.bNoMore = true;
 
     }
-
+    //四叉树算法
+    //使用四叉树来快速筛选特征点，筛选的目的是非极大值抑制，取局部特征点邻域中FAST角点相应值最大的点，
+    //而如何搜索到这些扎堆的特征点，则采用的是四叉树的分块思想，递归找到成群的点，并从中找到相应值最大的点。
     vector<cv::KeyPoint> ORBextractor::DistributeOctTree(const vector<cv::KeyPoint>& vToDistributeKeys, const int &minX,
                                                          const int &maxX, const int &minY, const int &maxY, const int &N, const int &level)
     {
@@ -1055,7 +1057,7 @@ namespace ORB_SLAM3
         for (int level = 0; level < nlevels; ++level)
             computeOrientation(mvImagePyramid[level], allKeypoints[level], umax);
     }
-
+    //计算特征点描述子
     static void computeDescriptors(const Mat& image, vector<KeyPoint>& keypoints, Mat& descriptors,
                                    const vector<Point>& pattern)
     {
@@ -1148,7 +1150,7 @@ namespace ORB_SLAM3
         //cout << "[ORBextractor]: extracted " << _keypoints.size() << " KeyPoints" << endl;
         return monoIndex;
     }
-
+    //构建图像金字塔(同一图像的不同分辨率的组合)
     void ORBextractor::ComputePyramid(cv::Mat image)
     {
         for (int level = 0; level < nlevels; ++level)
@@ -1162,6 +1164,7 @@ namespace ORB_SLAM3
             // Compute the resized image
             if( level != 0 )
             {
+                //使用resize函数实现了图像的缩放，构建每层金字塔的图像
                 resize(mvImagePyramid[level-1], mvImagePyramid[level], sz, 0, 0, INTER_LINEAR);
 
                 copyMakeBorder(mvImagePyramid[level], temp, EDGE_THRESHOLD, EDGE_THRESHOLD, EDGE_THRESHOLD, EDGE_THRESHOLD,

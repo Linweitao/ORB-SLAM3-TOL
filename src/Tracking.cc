@@ -2516,7 +2516,7 @@ void Tracking::MonocularInitialization()
 
         // Find correspondences 找匹配点
         ORBmatcher matcher(0.9,true);
-        int nmatches = matcher.SearchForInitialization(mInitialFrame,mCurrentFrame,mvbPrevMatched,mvIniMatches,100);
+        int nmatches = matcher.SearchForInitialization(mInitialFrame,mCurrentFrame,mvbPrevMatched,mvIniMatches,100);//参考帧与当前帧的特征点匹配
 
         // Check if there are enough correspondences
         if(nmatches<100)//匹配点数小于100，则一切重新来
@@ -2531,6 +2531,8 @@ void Tracking::MonocularInitialization()
         cv::Mat tcw; // Current Camera Translation
         vector<bool> vbTriangulated; // Triangulated Correspondences (mvIniMatches)
 
+        // ReconstructWithTwoViews利用构建的虚拟相机模型，针对不同相机计算基础矩阵和单应性矩阵，
+        //   选取最佳的模型来恢复出最开始两帧之间的相对姿态，并进行三角化得到初始地图点。
         if(mpCamera->ReconstructWithTwoViews(mInitialFrame.mvKeysUn,mCurrentFrame.mvKeysUn,mvIniMatches,Rcw,tcw,mvIniP3D,vbTriangulated))
         {//如果位姿求解成功，删除没有成功三角化的匹配点
             for(size_t i=0, iend=mvIniMatches.size(); i<iend;i++)
